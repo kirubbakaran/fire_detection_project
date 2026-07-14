@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Live Camera Detection</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>📷 Live Camera Detection</h1>
+        <p class="welcome-text">Hi {{ username }}, point your camera at the area you want to monitor.</p>
+
+        <video id="video" class="video-frame" autoplay playsinline muted></video>
+        <canvas id="canvas" style="display:none;"></canvas>
+
+        <div id="statusBox" class="status-box status-safe">Click "Start Monitoring" to begin</div>
+
+        <button id="startBtn">▶️ Start Monitoring</button>
+        <button id="stopBtn" class="btn-secondary" style="display:none;">⏹️ Stop Monitoring</button>
+
+        <a href="/features" class="back-link">← Back to features</a>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/alarm.js') }}"></script>
+    <script>
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const statusBox = document.getElementById('statusBox');
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+
+        let stream = null;
+        let monitoring = false;
+        let lastAlarmState = false;
+        let intervalId = null;
+
+        async function startCamera() {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ video: true });
+                video.srcObject = stream;
+            } catch (err) {
+                statusBox.className = "status-box status-fire";
+                statusBox.textContent = "Could not access camera: " + err.message;
+                return;
+            }
+
+            monitoring = true;
+            startBtn.style.display = "none";
+            stopBtn.style.display = "inline-block";
+
+            // Send a frame to the server once every second
+            intervalId = setInterval(captureAndSend, 1000);
+        }
+
+        function stopCamera() {
+            monitoring = false;
+            clearInterval(intervalId);
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+            startBtn.style.display = "inline-block";
+            stopBtn.style.display = "none";
+            statusBox.className = "status-box status-safe";
+            statusBox.textContent = "Monitoring stopped.";
+        }
+
+        async function captureAndSend() {
+            if (!monitoring) return;
+
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const frameData = canvas.toDataURL('image/jpeg', 0.7);
+
+            try {
+                const response = await fetch('/predict_frame', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ frame: frameData })
+                });
+                const data = await response.json();
+
+                if (data.error) {
+                    statusBox.className = "status-box status-fire";
+                    statusBox.textContent = "Error: " + data.error;
+                    return;
+                }
+
+                if (data.is_fire) {
+                    statusBox.className = "status-box status-fire";
+                    statusBox.textContent = `🚨 ${data.label} (${data.confidence}%)`;
+                    if (!lastAlarmState) {
+                        playAlarm();
+                    }
+                    lastAlarmState = true;
+                } else {
+                    statusBox.className = "status-box status-safe";
+                    statusBox.textContent = `🔍 Scanning... No Fire (${data.confidence}%)`;
+                    lastAlarmState = false;
+                }
+            } catch (err) {
+                console.error("Prediction request failed:", err);
+            }
+        }
+
+        startBtn.addEventListener('click', startCamera);
+        stopBtn.addEventListener('click', stopCamera);
+    </script>
+</body>
+</html>

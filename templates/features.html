@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Choose Detection Mode</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>🔥 Fire Detection System</h1>
+        <p class="welcome-text">Welcome, <strong>{{ username }}</strong>! Choose how you'd like to check for fire.</p>
+
+        <a href="/camera" class="btn">📷 Live Camera Detection</a>
+        <a href="/photo" class="btn btn-secondary">🖼️ Upload Photo Detection</a>
+    </div>
+</body>
+</html>
+

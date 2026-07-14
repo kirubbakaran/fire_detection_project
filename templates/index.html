@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Fire Detection System</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>🔥 Fire Detection System</h1>
+        <p class="subtitle">AI-powered fire monitoring using deep learning</p>
+
+        {% if error %}
+        <p class="error-message">{{ error }}</p>
+        {% endif %}
+
+        <form method="POST" action="/">
+            <input type="text" name="username" placeholder="Enter your name" required autofocus>
+            <button type="submit">Continue</button>
+        </form>
+    </div>
+</body>
+</html>

@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Usage Stats</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container" style="max-width: 700px;">
+        <h1>📊 Usage Statistics</h1>
+        <p class="welcome-text">
+            Total visits: <strong>{{ total_visits }}</strong> &nbsp;|&nbsp;
+            Unique users: <strong>{{ unique_users }}</strong>
+        </p>
+
+        <table class="stats-table">
+            <tr><th>Username</th><th>Visit Time</th></tr>
+            {% for visit in recent_visits %}
+            <tr>
+                <td>{{ visit.username }}</td>
+                <td>{{ visit.visit_time }}</td>
+            </tr>
+            {% endfor %}
+        </table>
+
+        <a href="/" class="back-link">← Back to home</a>
+    </div>
+</body>
+</html>

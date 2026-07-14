@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Photo Detection</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>🖼️ Photo Detection</h1>
+        <p class="welcome-text">Hi {{ username }}, upload a photo to check for fire.</p>
+
+        <div class="upload-box" onclick="document.getElementById('fileInput').click()">
+            📤 Click to choose an image
+        </div>
+        <input type="file" id="fileInput" accept="image/*" style="display:none">
+
+        <img id="previewImage" alt="Preview">
+
+        <div id="resultBox"></div>
+
+        <a href="/features" class="back-link">← Back to features</a>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/alarm.js') }}"></script>
+    <script>
+        const fileInput = document.getElementById('fileInput');
+        const previewImage = document.getElementById('previewImage');
+        const resultBox = document.getElementById('resultBox');
+
+        // Phone photos can be huge (10-15MB, 4000px+ wide). Shrinking them
+        // in the browser first — before they're even uploaded — makes
+        // detection fast and avoids overloading the server on Render's
+        // free tier, which has very limited memory.
+        const MAX_SIDE = 800;
+
+        function shrinkImage(file) {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                const reader = new FileReader();
+
+                reader.onload = (e) => { img.src = e.target.result; };
+                reader.onerror = reject;
+
+                img.onload = () => {
+                    let { width, height } = img;
+                    if (width > height && width > MAX_SIDE) {
+                        height = Math.round(height * (MAX_SIDE / width));
+                        width = MAX_SIDE;
+                    } else if (height > MAX_SIDE) {
+                        width = Math.round(width * (MAX_SIDE / height));
+                        height = MAX_SIDE;
+                    }
+
+                    const canvas = document.createElement('canvas');
+                    canvas.width = width;
+                    canvas.height = height;
+                    canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+
+                    canvas.toBlob(
+                        (blob) => resolve({ blob, dataUrl: canvas.toDataURL('image/jpeg', 0.85) }),
+                        'image/jpeg',
+                        0.85
+                    );
+                };
+                img.onerror = reject;
+
+                reader.readAsDataURL(file);
+            });
+        }
+
+        fileInput.addEventListener('change', async () => {
+            const file = fileInput.files[0];
+            if (!file) return;
+
+            resultBox.innerHTML = '<div class="status-box">🔍 Scanning image...</div>';
+
+            try {
+                const { blob, dataUrl } = await shrinkImage(file);
+
+                previewImage.src = dataUrl;
+                previewImage.style.display = 'block';
+
+                const formData = new FormData();
+                formData.append('image', blob, 'upload.jpg');
+
+                const response = await fetch('/predict_image', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    // Try to read a JSON error message from the server; if the
+                    // response body is empty (server crashed mid-request),
+                    // fall back to a clear message instead of a raw parse error.
+                    let message = `Server error (status ${response.status})`;
+                    try {
+                        const errData = await response.json();
+                        if (errData.error) message = errData.error;
+                    } catch (_) { /* body was empty or not JSON */ }
+                    resultBox.innerHTML = `<div class="status-box status-fire">Error: ${message}</div>`;
+                    return;
+                }
+
+                const data = await response.json();
+
+                if (data.is_fire) {
+                    resultBox.innerHTML = `<div class="status-box status-fire">🚨 ${data.label} (${data.confidence}%)</div>`;
+                    playAlarm();
+                } else {
+                    resultBox.innerHTML = `<div class="status-box status-safe">✅ ${data.label} (${data.confidence}%)</div>`;
+                }
+            } catch (err) {
+                resultBox.innerHTML = `<div class="status-box status-fire">Request failed: ${err}</div>`;
+            }
+        });
+    </script>
+</body>
+</html>
