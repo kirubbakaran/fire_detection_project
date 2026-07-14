@@ -1,2 +1,5 @@
-venv/'ndataset/'n__pycache__/'n*.pyc
+venv/
+dataset/
+__pycache__/
+*.pyc
 model/model.h5
