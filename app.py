@@ -1,12 +1,9 @@
 """
-Fire Detection System - Flask Backend
+Fire Detection System - Flask Backend (TFLite version)
 ------------------------------------------------
-Handles:
-- Username entry + logging to MySQL
-- Serving the feature selection page
-- Photo upload detection
-- Live camera detection (via browser webcam + JS, not OpenCV VideoCapture,
-  since this needs to work when deployed on a server with no physical camera)
+Same as before, but uses TensorFlow Lite for inference instead of full
+Keras/TensorFlow. This uses dramatically less memory, which matters a lot
+on Render's free 512MB tier.
 
 HOW TO RUN LOCALLY:
     python app.py
@@ -16,8 +13,6 @@ Then open http://127.0.0.1:5000 in your browser.
 import os
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["OMP_NUM_THREADS"] = "1"
-os.environ["TF_NUM_INTEROP_THREADS"] = "1"
-os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
 
 import base64
 import io
@@ -30,21 +25,23 @@ from PIL import Image, ImageOps
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify
 import pymysql
 
-from tensorflow.keras.models import load_model
+# tflite_runtime is a much smaller, lighter-weight package than full
+# tensorflow — it only contains what's needed to RUN a model, not train
+# one. This is the key memory saving over the previous version.
+try:
+    from tflite_runtime.interpreter import Interpreter
+except ImportError:
+    # Fallback for local development if tflite_runtime isn't installed —
+    # uses the tflite interpreter bundled inside full tensorflow instead.
+    from tensorflow.lite import Interpreter
 
 app = Flask(__name__)
 app.secret_key = "change-this-to-a-random-secret-key"  # needed for session (username)
 
-# Reject anything above ~15 MB outright instead of letting it OOM the worker
 app.config["MAX_CONTENT_LENGTH"] = 15 * 1024 * 1024
 
-MODEL_PATH = "model/model.h5"
+MODEL_PATH = "model/model.tflite"
 IMG_SIZE = (224, 224)
-
-# Cap the longest side of any uploaded/streamed image before it ever
-# becomes a numpy array. Kept small (400px) since Render's free tier
-# only has 512MB RAM total, and TensorFlow itself uses a big chunk of
-# that just sitting idle.
 MAX_UPLOAD_SIDE = 400
 
 # ------------------------------
@@ -63,24 +60,21 @@ def get_db_connection():
 
 
 # ------------------------------
-# LOAD MODEL ONCE AT STARTUP
+# LOAD TFLITE MODEL ONCE AT STARTUP
 # ------------------------------
 try:
-    model = load_model(MODEL_PATH, compile=False)
+    interpreter = Interpreter(model_path=MODEL_PATH)
+    interpreter.allocate_tensors()
+    input_details = interpreter.get_input_details()
+    output_details = interpreter.get_output_details()
     model_loaded = True
 except Exception as e:
-    model = None
+    interpreter = None
     model_loaded = False
-    print(f"WARNING: could not load model -> {e}")
+    print(f"WARNING: could not load TFLite model -> {e}")
 
 
 def load_and_shrink_image(file_or_bytes):
-    """
-    Opens an image from a file stream or raw bytes, fixes phone-camera
-    EXIF rotation, and shrinks it so the longest side is at most
-    MAX_UPLOAD_SIDE pixels. This must happen BEFORE converting to a
-    numpy array, since that's where the real memory cost is.
-    """
     img = Image.open(file_or_bytes)
     img = ImageOps.exif_transpose(img)
     img = img.convert("RGB")
@@ -91,14 +85,16 @@ def load_and_shrink_image(file_or_bytes):
 def predict_fire(img_array):
     """
     Takes a raw RGB image (numpy array) and returns (is_fire, label, confidence)
+    using the TFLite interpreter.
     """
     img_resized = cv2.resize(img_array, IMG_SIZE)
-    img_normalized = img_resized / 255.0
+    img_normalized = (img_resized / 255.0).astype(np.float32)
     img_input = np.expand_dims(img_normalized, axis=0)
 
-    prediction = model.predict(img_input, verbose=0)[0][0]
+    interpreter.set_tensor(input_details[0]['index'], img_input)
+    interpreter.invoke()
+    prediction = interpreter.get_tensor(output_details[0]['index'])[0][0]
 
-    # class_indices from training: {'fire_images': 0, 'non_fire_images': 1}
     if prediction < 0.5:
         is_fire = True
         label = "FIRE DETECTED"
@@ -269,9 +265,6 @@ def stats():
     )
 
 
-# ==================================================================
-# ROUTE 6: HANDLE "FILE TOO LARGE" CLEANLY INSTEAD OF CRASHING
-# ==================================================================
 @app.errorhandler(413)
 def too_large(e):
     return jsonify({"error": "Image is too large. Please upload a smaller photo."}), 413

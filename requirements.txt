@@ -1,6 +1,6 @@
 flask
 pymysql
-tensorflow-cpu>=2.12
+tflite-runtime
 opencv-python
 numpy
 pillow
