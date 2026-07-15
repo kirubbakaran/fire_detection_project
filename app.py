@@ -48,10 +48,12 @@ MAX_UPLOAD_SIDE = 400
 # DATABASE CONNECTION SETTINGS
 # ------------------------------
 DB_CONFIG = {
-    "host": "localhost",
-    "user": "root",
-    "password": "",   # <-- change this to your MySQL password
-    "database": "fire_detection_db",
+    "host": os.environ.get("DB_HOST", "localhost"),
+    "port": int(os.environ.get("DB_PORT", 3306)),
+    "user": os.environ.get("DB_USER", "root"),
+    "password": os.environ.get("DB_PASSWORD", ""),
+    "database": os.environ.get("DB_NAME", "fire_detection_db"),
+    "ssl": {"ssl": {}},
 }
 
 

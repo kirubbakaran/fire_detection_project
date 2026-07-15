@@ -1,5 +1,6 @@
 flask
 pymysql
+cryptography
 tflite-runtime
 opencv-python
 numpy<2
