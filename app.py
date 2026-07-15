@@ -13,13 +13,20 @@ HOW TO RUN LOCALLY:
 Then open http://127.0.0.1:5000 in your browser.
 """
 
+import os
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["TF_NUM_INTEROP_THREADS"] = "1"
+os.environ["TF_NUM_INTRAOP_THREADS"] = "1"
+
 import base64
 import io
+import traceback
 from datetime import datetime
 
 import numpy as np
 import cv2
-from PIL import Image
+from PIL import Image, ImageOps
 from flask import Flask, render_template, request, redirect, url_for, session, jsonify
 import pymysql
 
@@ -28,8 +35,17 @@ from tensorflow.keras.models import load_model
 app = Flask(__name__)
 app.secret_key = "change-this-to-a-random-secret-key"  # needed for session (username)
 
+# Reject anything above ~15 MB outright instead of letting it OOM the worker
+app.config["MAX_CONTENT_LENGTH"] = 15 * 1024 * 1024
+
 MODEL_PATH = "model/model.h5"
 IMG_SIZE = (224, 224)
+
+# Cap the longest side of any uploaded/streamed image before it ever
+# becomes a numpy array. Kept small (400px) since Render's free tier
+# only has 512MB RAM total, and TensorFlow itself uses a big chunk of
+# that just sitting idle.
+MAX_UPLOAD_SIDE = 400
 
 # ------------------------------
 # DATABASE CONNECTION SETTINGS
@@ -56,6 +72,20 @@ except Exception as e:
     model = None
     model_loaded = False
     print(f"WARNING: could not load model -> {e}")
+
+
+def load_and_shrink_image(file_or_bytes):
+    """
+    Opens an image from a file stream or raw bytes, fixes phone-camera
+    EXIF rotation, and shrinks it so the longest side is at most
+    MAX_UPLOAD_SIDE pixels. This must happen BEFORE converting to a
+    numpy array, since that's where the real memory cost is.
+    """
+    img = Image.open(file_or_bytes)
+    img = ImageOps.exif_transpose(img)
+    img = img.convert("RGB")
+    img.thumbnail((MAX_UPLOAD_SIDE, MAX_UPLOAD_SIDE), Image.LANCZOS)
+    return np.array(img)
 
 
 def predict_fire(img_array):
@@ -91,10 +121,8 @@ def index():
         if not username:
             return render_template("index.html", error="Please enter your name.")
 
-        # Save to session so other pages know who's using the app
         session["username"] = username
 
-        # Log this visit to MySQL
         try:
             conn = get_db_connection()
             with conn.cursor() as cursor:
@@ -105,7 +133,7 @@ def index():
             conn.commit()
             conn.close()
         except Exception as e:
-            print(f"DB logging failed: {e}")  # app still works even if DB is down
+            print(f"DB logging failed: {e}")
 
         return redirect(url_for("features"))
 
@@ -143,11 +171,17 @@ def predict_image():
     if not file:
         return jsonify({"error": "No image uploaded"}), 400
 
-    img = Image.open(file.stream).convert("RGB")
-    img_array = np.array(img)
-    is_fire, label, confidence = predict_fire(img_array)
+    try:
+        img_array = load_and_shrink_image(file.stream)
+        is_fire, label, confidence = predict_fire(img_array)
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"Could not process image: {e}"}), 500
 
-    log_detection(session.get("username", "guest"), "photo", label, confidence)
+    try:
+        log_detection(session.get("username", "guest"), "photo", label, confidence)
+    except Exception as e:
+        print(f"Detection log failed (non-fatal): {e}")
 
     return jsonify({"is_fire": is_fire, "label": label, "confidence": round(confidence, 2)})
 
@@ -165,28 +199,23 @@ def camera_page():
 
 @app.route("/predict_frame", methods=["POST"])
 def predict_frame():
-    """
-    Receives a single webcam frame captured by JavaScript (as a base64
-    JPEG string), runs it through the model, and returns the result.
-    The browser calls this endpoint repeatedly (e.g. every second) to
-    simulate live detection.
-    """
     if not model_loaded:
         return jsonify({"error": "Model not loaded on server"}), 500
 
-    data = request.get_json()
-    frame_data = data.get("frame")  # base64 string like "data:image/jpeg;base64,...."
+    data = request.get_json(silent=True) or {}
+    frame_data = data.get("frame")
 
     if not frame_data:
         return jsonify({"error": "No frame received"}), 400
 
-    # Strip the "data:image/jpeg;base64," prefix
-    header, encoded = frame_data.split(",", 1)
-    img_bytes = base64.b64decode(encoded)
-    img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-    img_array = np.array(img)
-
-    is_fire, label, confidence = predict_fire(img_array)
+    try:
+        header, encoded = frame_data.split(",", 1)
+        img_bytes = base64.b64decode(encoded)
+        img_array = load_and_shrink_image(io.BytesIO(img_bytes))
+        is_fire, label, confidence = predict_fire(img_array)
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({"error": f"Could not process frame: {e}"}), 500
 
     return jsonify({"is_fire": is_fire, "label": label, "confidence": round(confidence, 2)})
 
@@ -238,6 +267,14 @@ def stats():
         unique_users=unique_users,
         recent_visits=recent_visits,
     )
+
+
+# ==================================================================
+# ROUTE 6: HANDLE "FILE TOO LARGE" CLEANLY INSTEAD OF CRASHING
+# ==================================================================
+@app.errorhandler(413)
+def too_large(e):
+    return jsonify({"error": "Image is too large. Please upload a smaller photo."}), 413
 
 
 if __name__ == "__main__":
