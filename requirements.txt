@@ -2,6 +2,6 @@ flask
 pymysql
 tflite-runtime
 opencv-python
-numpy
+numpy<2
 pillow
 gunicorn
